@@ -355,7 +355,7 @@ function rememberTeleportTarget(img, now) {
 }
 
 function newTeleportSelectionStats() {
-  return { scans: 0, panels: 0, rings: 0, mapMatches: 0, failedMapInliers: 0 };
+  return { scans: 0, panels: 0, headers: 0, rings: 0, bestRing: 0, mapMatches: 0, failedMapInliers: 0 };
 }
 
 function clearTeleport() {
