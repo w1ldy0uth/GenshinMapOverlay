@@ -21,7 +21,7 @@
   // - waitRender: auf neues Kachelbild warten statt im Hintergrund (Messbank)
   const DEFAULTS = {
     tplRadius: 86, arrowRadius: 18, search: 24, margin: 160, minCorr: 0.5, lostMs: 3000, maxJump: 40,
-    zoomCheckEvery: 8, zoomCheckBelow: 0.8, zoomSwitchCorr: 0.75, zoomSwitchMargin: 0.08, waitRender: false,
+    zoomCheckEvery: 8, zoomCheckBelow: 0.8, zoomSwitchCorr: 0.75, zoomSwitchMargin: 0.08, reacquireMs: 600, waitRender: false,
   };
 
   class MinimapTracker {
@@ -52,6 +52,8 @@
       this.lastGood = now;
       this.recovering = false;
       this.fresh = true;
+      this.needsConfirmation = true;
+      this.confirmSince = null;
     }
 
     stop() {
@@ -177,6 +179,12 @@
 
       const jump = Math.hypot(best.x - this.pos.x, best.y - this.pos.y) * best.s;
       if (!this.fresh && best.s === this.scale && jump > this.o.maxJump) return this.unsure(now, best.corr);
+      // Isolated matches after an interruption can come from a different, similar-looking area.
+      if (this.needsConfirmation) {
+        this.confirmSince ??= now;
+        if (now - this.confirmSince < this.o.reacquireMs) return { ok: false, corr: best.corr };
+        this.needsConfirmation = false;
+      }
       this.pos = { x: best.x, y: best.y };
       this.scale = best.s;
       this.lastGood = now;
@@ -188,6 +196,8 @@
     unsure(now, corr) {
       // Nach einem Menü ist die letzte Position weiterhin ein brauchbarer Suchanker.
       this.recovering = now - this.lastGood > this.o.lostMs;
+      this.needsConfirmation = true;
+      this.confirmSince = null;
       return { ok: false, corr, lost: this.recovering };
     }
   }
