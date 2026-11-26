@@ -434,7 +434,7 @@
     }
 
     // prior (Pixel dieses Bildes) → nur Punkte nahe dem letzten Ausschnitt, passender Zoom
-    pass(gray, params, prior, usable) {
+    pass(gray, params, prior, usable, searchMargin = 0.6) {
       const started = Date.now();
       const query = detect(this.cv, gray, params.nfeatures, params, usable);
       const tDetect = Date.now() - started;
@@ -451,8 +451,8 @@
         const x1 = (gray.cols - tx) / s;
         const y0 = (0 - ty) / s;
         const y1 = (gray.rows - ty) / s;
-        const mx = (x1 - x0) * 0.6;
-        const my = (y1 - y0) * 0.6;
+        const mx = (x1 - x0) * searchMargin;
+        const my = (y1 - y0) * searchMargin;
         // Pyramide der Aufnahme verkleinert → Referenzstufen dürfen gröber sein als der Zoom
         const zView = 13 + Math.log2(s);
         levels = this.ref.levels.filter((z) => z - zView >= -2.2 && z - zView <= 0.9);
@@ -474,7 +474,7 @@
 
     // prior: letztes Ergebnis (Original-Bildschirmpixel) → nur in der Nähe suchen.
     // Ohne prior: Grobsuche auf kleinem Bild, bei Erfolg Feinsuche zur Bestätigung.
-    locate(rgba, width, height, prior) {
+    locate(rgba, width, height, prior, recover = false) {
       const cv = this.cv;
       const started = Date.now();
       let gray = rgbaToGray(cv, rgba, width, height);
@@ -497,7 +497,7 @@
       let usable = makeMask(prior ? this.o.mask : globalOpts);
 
       const timing = { detect: 0, match: 0 };
-      let mode = 'track';
+      let mode = recover ? 'local-recovery' : 'track';
       let start = prior ? { s: prior.s * scale, tx: prior.tx * scale, ty: prior.ty * scale } : null;
       let result = null;
 
@@ -530,7 +530,8 @@
           if (usable) usable.delete();
           usable = makeMask(this.o.mask);
         }
-        const fine = this.pass(gray, this.o.track, start, usable);
+        const params = recover ? { ...this.o.globalDetail, minInliers: this.o.track.minInliers } : this.o.track;
+        const fine = this.pass(gray, params, start, usable, recover ? 1.2 : 0.6);
         timing.detect += fine.tDetect;
         timing.match += fine.tMatch;
         result = fine;

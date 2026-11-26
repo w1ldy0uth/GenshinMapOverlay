@@ -11,6 +11,9 @@
     checkMs: 1000,
     driftPx: 5,
     lostAfter: 3,
+    // Keep the last pose briefly after tracking loss, while continuing global search.
+    recoverMs: 5000,
+    recoverIntervalMs: 250,
     exclude: null,
     // Einstellungen für die Symbol-Maske (uiMask), gilt für den Fluss
     mask: null,
@@ -65,6 +68,7 @@
 
     reset() {
       this.prior = null;
+      this.recovery = null;
       this.hist = null;
       this.lostFrames = 0;
       this.lastCheck = -Infinity;
@@ -87,21 +91,36 @@
         this.lose();
         return { ok: false, scene: true };
       }
+      if (this.recovery && (now >= this.recovery.until ||
+        (hist && this.recovery.hist && histDistance(this.recovery.hist, hist) > this.o.sceneCut))) {
+        this.recovery = null;
+      }
       let res = this.prior && this.flow.active ? this.follow(img, now) : null;
       if (!res || !res.ok) {
-        res = this.matcher.locate(data, width, height, this.prior);
+        if (this.recovery && now >= this.recovery.next) {
+          this.recovery.next = now + this.o.recoverIntervalMs;
+          res = this.matcher.locate(data, width, height, this.recovery.prior, true);
+        }
+        if (!res || !res.ok) res = this.matcher.locate(data, width, height, this.prior);
         // Nachführen gescheitert (z. B. schneller Zoom) → gleich im selben Bild neu suchen
         if (!res.ok && this.prior) res = this.matcher.locate(data, width, height, null);
         if (res.ok) this.anchor(img, res, now);
       }
       if (res.ok) {
+        this.recovery = null;
         this.prior = res;
         this.hist = hist;
         this.lostFrames = 0;
       } else if (this.prior && ++this.lostFrames < this.o.lostAfter) {
         // Aussetzer: Ansicht halten
       } else {
+        const prior = this.prior;
         this.lose();
+        if (prior && this.o.recoverMs > 0) {
+          this.recovery = { prior, hist, until: now + this.o.recoverMs, next: now };
+        } else if (this.recovery) {
+          this.recovery.hist = hist;
+        }
       }
       return res;
     }

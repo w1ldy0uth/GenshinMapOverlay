@@ -358,7 +358,7 @@ async function loop() {
         if (recent.length > 240) recent.shift();
         if (res.ok) {
           // Karte frisch geöffnet (vorher Weltansicht) → Mitte = Spielfigur, Anker für die Minimap
-          if (!wasLocked && now - unlockedSince > ANCHOR_AFTER_MS && minimap) {
+          if (!wasLocked && res.mode !== 'local-recovery' && now - unlockedSince > ANCHOR_AFTER_MS && minimap) {
             minimapAnchor = { x: (img.width / 2 - res.tx) / res.s, y: (img.height / 2 - res.ty) / res.s };
             minimap.stop();
           }
