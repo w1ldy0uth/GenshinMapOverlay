@@ -15,26 +15,30 @@
 
   function isLoadingScreen({ data, width, height }) {
     const pixel = (x, y) => 4 * (Math.floor(y * height) * width + Math.floor(x * width));
-    // Dark loading screen: flat charcoal around the edges, emblem in the middle,
-    // and bright tip text below. A plain black fade alone is not a loading screen.
+    const sample = pixel(0.08, 0.15);
+    const light = data[sample] >= 249 && data[sample + 1] >= 249 && data[sample + 2] >= 249;
+    const background = light ? [255, 255, 255] : [27, 29, 32];
+    // Both loading themes have flat edges, a centered emblem, and a tip below.
+    // A plain fade without the emblem and tip does not qualify.
     for (const y of [0.15, 0.35, 0.65, 0.8]) {
       for (const x of [0.08, 0.2, 0.8, 0.92]) {
         const i = pixel(x, y);
-        if (Math.abs(data[i] - 27) > 6 || Math.abs(data[i + 1] - 29) > 6 || Math.abs(data[i + 2] - 32) > 6) return false;
+        if (background.some((channel, c) => Math.abs(data[i + c] - channel) > 6)) return false;
       }
     }
-    const hasBrightPixels = (left, top, right, bottom, min) => {
+    const hasForeground = (left, top, right, bottom) => {
       let count = 0;
       for (let y = Math.floor(top * height); y < Math.ceil(bottom * height); y++) {
         for (let x = Math.floor(left * width); x < Math.ceil(right * width); x++) {
           const i = 4 * (y * width + x);
-          if (data[i] >= 75 && data[i + 1] >= 65 && ++count >= min) return true;
+          const foreground = light ? data[i] <= 220 && data[i + 1] <= 225 : data[i] >= 75 && data[i + 1] >= 65;
+          if (foreground && ++count >= 6) return true;
         }
       }
       return false;
     };
-    return hasBrightPixels(0.44, 0.38, 0.56, 0.56, 6)
-      && hasBrightPixels(0.24, 0.76, 0.76, 0.94, 6);
+    return hasForeground(0.44, 0.38, 0.56, 0.56)
+      && hasForeground(0.24, 0.76, 0.76, 0.94);
   }
 
   // - tplRadius: Vergleichskreis innerhalb des Rings, arrowRadius: Pfeil der Spielfigur ausblenden
