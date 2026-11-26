@@ -474,7 +474,7 @@
 
     // prior: letztes Ergebnis (Original-Bildschirmpixel) → nur in der Nähe suchen.
     // Ohne prior: Grobsuche auf kleinem Bild, bei Erfolg Feinsuche zur Bestätigung.
-    locate(rgba, width, height, prior, recover = false) {
+    locate(rgba, width, height, prior, recover = false, globalWidth = null) {
       const cv = this.cv;
       const started = Date.now();
       let gray = rgbaToGray(cv, rgba, width, height);
@@ -503,10 +503,10 @@
 
       if (!start) {
         mode = 'global';
-        const gScale = Math.min(1, this.o.global.width / gray.cols);
+        const gScale = Math.min(1, (globalWidth ?? this.o.global.width) / gray.cols);
         const small = gScale < 1 ? resized(cv, gray, gScale) : gray;
         const smallMask = usable && gScale < 1 ? resized(cv, usable, gScale, cv.INTER_NEAREST) : usable;
-        const coarse = this.pass(small, this.o.global, null, smallMask);
+        const coarse = this.pass(small, globalWidth === null ? this.o.global : this.o.globalDetail, null, smallMask);
         if (small !== gray) small.delete();
         if (smallMask && smallMask !== usable) smallMask.delete();
         timing.detect += coarse.tDetect;

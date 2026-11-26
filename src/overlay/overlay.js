@@ -32,12 +32,20 @@ let hover = -1;
 let drawnCount = 0;
 let mapMarkers = 0;
 let mapIcons = 0;
+let minimapMarkers = 0;
+let lastMinimapState = '';
 let lastDrawAt = null;
 let lastViewAt = null;
 let lastMapState = '';
 let lastMapLog = -Infinity;
 
 setInterval(() => {
+  const minimapState = target || settings.minimap === false ? '' :
+    !minimap ? 'untracked' : minimapMarkers ? 'markers' : 'empty';
+  if (minimapState !== lastMinimapState) {
+    lastMinimapState = minimapState;
+    if (minimapState) api.mapDiagnostics({ kind: 'minimap', state: minimapState, markers: minimapMarkers, enabled: enabled.size });
+  }
   const state = target ? (!data ? 'no-data' : !mapMarkers ? 'empty' : mapIcons ? 'markers' : 'fallback-only') : '';
   const now = performance.now();
   if (state === lastMapState && (!state || now - lastMapLog < 30000)) return;
@@ -270,6 +278,7 @@ function draw() {
   drawnCount = 0;
   mapMarkers = 0;
   mapIcons = 0;
+  minimapMarkers = 0;
   lastDrawAt = performance.now();
   if (!data || !view || visibility <= 0) {
     if (data && minimap && settings.minimap !== false && visibility <= 0) drawMinimap();
@@ -387,6 +396,7 @@ function drawMinimap() {
       const x = cx + dx * s;
       const y = cy + dy * s;
       const d = Math.hypot(dx, dy);
+      if (d * s <= r + half) minimapMarkers++;
       if (!isFound && d <= near && (closest < 0 || d < closestD)) {
         closest = i;
         closestD = d;

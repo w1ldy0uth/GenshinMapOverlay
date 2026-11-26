@@ -344,7 +344,8 @@ function rememberTeleportTarget(img, now) {
     const offset = y * img.width * 4;
     cropped.set(img.data.subarray(offset, offset + row), y * row);
   }
-  const view = matcher.locate(cropped, point.mapWidth, img.height, null);
+  let view = matcher.locate(cropped, point.mapWidth, img.height, null);
+  if (!view.ok) view = matcher.locate(cropped, point.mapWidth, img.height, null, false, 800);
   if (!view.ok) {
     teleportSelectionStats.failedMapInliers = Math.max(teleportSelectionStats.failedMapInliers, view.inliers);
     return;

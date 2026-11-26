@@ -1096,7 +1096,7 @@ ipcMain.on('tracker:view', (event, view) => {
 
 ipcMain.on('overlay:map-diagnostics', (event, stats) => {
   if (!fromOverlay(event)) return;
-  log(`map-draw: ${JSON.stringify(stats)}`);
+  log(`${stats.kind === 'minimap' ? 'minimap-draw' : 'map-draw'}: ${JSON.stringify(stats)}`);
 });
 
 // Marker in der Nähe der Spielfigur (Id) oder null → Nähe-Taste an/aus
