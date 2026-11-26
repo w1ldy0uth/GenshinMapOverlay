@@ -47,8 +47,25 @@
   const DEFAULTS = {
     tplRadius: 86, arrowRadius: 18, search: 24, margin: 160, minCorr: 0.5, lostMs: 3000, maxJump: 40,
     zoomCheckEvery: 8, zoomCheckBelow: 0.8, zoomSwitchCorr: 0.75, zoomSwitchMargin: 0.08,
-    holdMs: 350, reacquireMs: 600, waitRender: false,
+    holdMs: 350, reacquireMs: 600, motionMaxAgeMs: 900, waitRender: false,
   };
+
+  const MOTION_RADIUS = 8;
+  const MOTION_MIN_CORR = 0.75;
+  const MOTION_MAX_FRAME_GAP_MS = 220;
+
+  function mapSignal(cv, rgba, width, height) {
+    // The camera cone changes brightness. Relative red/blue contrast keeps
+    // coastlines and terrain colors useful when it rotates across the minimap.
+    const mat = new cv.Mat(height, width, cv.CV_32F);
+    const values = mat.data32F;
+    for (let i = 0; i < values.length; i++) {
+      const r = rgba[i * 4];
+      const b = rgba[i * 4 + 2];
+      values[i] = (r - b) / (r + b + 8);
+    }
+    return mat;
+  }
 
   class MinimapTracker {
     // render(cx, cy, scale, size) → Promise<{ data (RGBA), width, height }>: Kachelbild size×size um Kartenpunkt cx/cy
@@ -60,6 +77,13 @@
       this.mask = new cv.Mat(2 * R, 2 * R, cv.CV_8U, new cv.Scalar(0));
       cv.circle(this.mask, new cv.Point(R, R), R - 3, new cv.Scalar(255), -1);
       cv.circle(this.mask, new cv.Point(R, R), this.o.arrowRadius, new cv.Scalar(0), -1);
+      const radius = Math.min(48, R - MOTION_RADIUS);
+      const offset = R - radius;
+      this.motionRect = new cv.Rect(offset, offset, 2 * radius, 2 * radius);
+      this.motionSearchRect = new cv.Rect(offset - MOTION_RADIUS, offset - MOTION_RADIUS,
+        2 * (radius + MOTION_RADIUS), 2 * (radius + MOTION_RADIUS));
+      this.motionMask = this.mask.roi(this.motionRect);
+      this.motionFrame = null;
       this.regions = new Map();
       this.rendering = new Map();
       this.pos = null;
@@ -74,6 +98,7 @@
     }
 
     start(x, y, now) {
+      this.clearMotion();
       this.pos = { x, y };
       this.lastGood = now;
       this.recovering = false;
@@ -83,8 +108,40 @@
     }
 
     stop() {
+      this.clearMotion();
       this.pos = null;
       this.recovering = false;
+    }
+
+    clearMotion() {
+      if (this.motionFrame) this.motionFrame.delete();
+      this.motionFrame = null;
+    }
+
+    rememberMotion(tpl, now) {
+      this.clearMotion();
+      const search = tpl.roi(this.motionSearchRect);
+      this.motionFrame = search.clone();
+      search.delete();
+      this.motionAt = now;
+    }
+
+    predictMotion(tpl, now) {
+      if (!this.motionFrame || this.needsConfirmation || now - this.motionAt > MOTION_MAX_FRAME_GAP_MS) return null;
+      const cv = this.cv;
+      const inner = tpl.roi(this.motionRect);
+      const out = new cv.Mat();
+      try {
+        cv.matchTemplate(this.motionFrame, inner, out, cv.TM_CCOEFF_NORMED, this.motionMask);
+        const { maxVal, maxLoc } = cv.minMaxLoc(out);
+        const dx = maxLoc.x - MOTION_RADIUS;
+        const dy = maxLoc.y - MOTION_RADIUS;
+        if (!Number.isFinite(maxVal) || maxVal < MOTION_MIN_CORR || Math.hypot(dx, dy) >= MOTION_RADIUS) return null;
+        return { x: this.pos.x + dx / this.scale, y: this.pos.y + dy / this.scale };
+      } finally {
+        inner.delete();
+        out.delete();
+      }
     }
 
     // Kachelbild (Grau, float) je Zoomstufe um p, groß genug für Vergleichskreis + Suche + Vorrat.
@@ -99,14 +156,7 @@
         const at = { x: p.x, y: p.y };
         this.rendering.set(s, this.render(at.x, at.y, s, size).then((img) => {
           const cv = this.cv;
-          const rgba = new cv.Mat(img.height, img.width, cv.CV_8UC4);
-          rgba.data.set(img.data);
-          const gray = new cv.Mat();
-          cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
-          const f = new cv.Mat();
-          gray.convertTo(f, cv.CV_32F);
-          rgba.delete();
-          gray.delete();
+          const f = mapSignal(cv, img.data, img.width, img.height);
           const old = this.regions.get(s);
           if (old) old.mat.delete();
           this.regions.set(s, { x: at.x, y: at.y, size, mat: f });
@@ -116,14 +166,14 @@
     }
 
     // Vergleich bei Zoomstufe s um die letzte Position → { corr, x, y } oder null (Kachelbild fehlt/zu klein)
-    match(tpl, s, S) {
+    match(tpl, s, S, pos = this.pos) {
       const cv = this.cv;
       const R = this.o.tplRadius;
       const reg = this.regions.get(s);
       if (!reg) return null;
       const half = reg.size / 2;
-      const px = half + (this.pos.x - reg.x) * s;
-      const py = half + (this.pos.y - reg.y) * s;
+      const px = half + (pos.x - reg.x) * s;
+      const py = half + (pos.y - reg.y) * s;
       const x0 = Math.max(0, Math.round(px - R - S));
       const y0 = Math.max(0, Math.round(py - R - S));
       const x1 = Math.min(reg.size, Math.round(px + R + S));
@@ -160,32 +210,38 @@
       const cv = this.cv;
       const R = this.o.tplRadius;
       // erster Schritt nach dem Anker: weiter suchen (Figur kann sich beim Schließen der Karte schon bewegt haben)
-      const S = this.fresh ? this.o.search * 2 : this.o.search;
+      const S = this.fresh ? this.o.search * 2 : this.needsConfirmation ? this.o.search
+        : Math.min(this.o.search, Math.ceil(4 + (now - this.lastGood) * 0.025));
       // nach Anker/Verlust alle Zoomstufen, sonst die aktuelle und ab und zu die anderen (Stadt betreten/verlassen)
       this.steps++;
       const sure = this.scale && !this.fresh && !this.recovering && this.lastCorr >= this.o.zoomCheckBelow;
       const scales = sure && this.steps % this.o.zoomCheckEvery ? [this.scale] : GEOMETRY.scales;
       await Promise.all(scales.map((s) => this.ensureRegion(this.pos, s, this.o.waitRender)));
 
-      const rgba = new cv.Mat(corner.height, corner.width, cv.CV_8UC4);
-      rgba.data.set(corner.data);
-      const roi = rgba.roi(new cv.Rect(GEOMETRY.cx - R, GEOMETRY.cy - R, 2 * R, 2 * R));
-      const gray = new cv.Mat();
-      cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY);
-      const tpl = new cv.Mat();
-      gray.convertTo(tpl, cv.CV_32F);
-      [rgba, roi, gray].forEach((m) => m.delete());
+      const signal = mapSignal(cv, corner.data, corner.width, corner.height);
+      const tpl = signal.roi(new cv.Rect(GEOMETRY.cx - R, GEOMETRY.cy - R, 2 * R, 2 * R));
+      signal.delete();
+      try {
+        return this.locate(tpl, scales, S, now);
+      } finally {
+        tpl.delete();
+      }
+    }
 
+    locate(tpl, scales, S, now) {
+      const motion = this.predictMotion(tpl, now);
       let best = null;
       let current = null;
       for (const s of scales) {
-        const m = this.match(tpl, s, S);
+        const predicted = motion && s === this.scale;
+        const m = predicted ? this.match(tpl, s, 10, motion) : this.match(tpl, s, S);
+        const correction = predicted && m ? Math.hypot(m.x - motion.x, m.y - motion.y) * s : 0;
+        if (correction > 10 || (correction > 5 && m.corr < 0.7)) continue;
         if (!m || !Number.isFinite(m.corr)) continue;
         if (s === this.scale) current = { ...m, s };
         if (!best || m.corr > best.corr) best = { ...m, s };
       }
-      tpl.delete();
-      if (!best) return this.unsure(now, NaN);
+      if (!best) return this.useMotion(tpl, now, motion, NaN);
       // Zoom nur wechseln, wenn die andere Stufe deutlich besser passt, und das zweimal hintereinander
       // (sonst springt die Figur bei unscharfer Minimap, z. B. 768p, auf einen Zufallstreffer)
       if (this.scale && !this.fresh && best.s !== this.scale) {
@@ -193,7 +249,7 @@
         if (!(clear && this.zoomVote === best.s)) {
           this.zoomVote = clear ? best.s : null;
           if (current) best = current;
-          else return this.unsure(now, best.corr);
+          else return this.useMotion(tpl, now, motion, best.corr);
         } else {
           this.zoomVote = null;
         }
@@ -201,25 +257,35 @@
         this.zoomVote = null;
       }
       this.lastCorr = best.corr;
-      if (best.corr < this.o.minCorr) return this.unsure(now, best.corr);
-
       const jump = Math.hypot(best.x - this.pos.x, best.y - this.pos.y) * best.s;
+      const minCorr = this.fresh ? Math.max(this.o.minCorr, 0.7) : this.o.minCorr;
+      if (best.corr < minCorr) return this.useMotion(tpl, now, motion, best.corr);
       if (!this.fresh && best.s === this.scale && jump > this.o.maxJump) return this.unsure(now, best.corr);
       // Isolated matches after an interruption can come from a different, similar-looking area.
       if (this.needsConfirmation) {
         this.confirmSince ??= now;
         if (now - this.confirmSince < this.o.reacquireMs) return { ok: false, corr: best.corr };
         this.needsConfirmation = false;
+        this.confirmSince = null;
       }
       this.pos = { x: best.x, y: best.y };
       this.scale = best.s;
       this.lastGood = now;
       this.recovering = false;
       this.fresh = false;
+      this.rememberMotion(tpl, now);
       return { ok: true, x: best.x, y: best.y, scale: best.s, corr: best.corr };
     }
 
+    useMotion(tpl, now, motion, corr) {
+      if (!motion || now - this.lastGood > this.o.motionMaxAgeMs) return this.unsure(now, corr);
+      this.pos = motion;
+      this.rememberMotion(tpl, now);
+      return { ok: true, ...motion, scale: this.scale, corr };
+    }
+
     unsure(now, corr) {
+      this.clearMotion();
       const sinceMatch = now - this.lastGood;
       // Keep the confirmed pose briefly through weak frames. The loading-screen
       // detector stops the tracker immediately when the old pose is invalid.
