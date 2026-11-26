@@ -1086,9 +1086,17 @@ ipcMain.on('tracker:view', (event, view) => {
   if (!fromTracker(event)) return;
   if (view.locked !== state.locked) {
     state.locked = view.locked;
+    log(view.locked
+      ? `map-lock: acquired mode=${view.mode} inliers=${view.inliers}`
+      : `map-lock: lost reason=${view.closed ? 'scene-cut' : 'tracking-loss-or-reset'}`);
     if (tray) tray.setToolTip(tr('tray.tooltip', { status: tr(view.locked ? 'tray.locked' : 'tray.searching') }));
   }
   sendToOverlay('view', view);
+});
+
+ipcMain.on('overlay:map-diagnostics', (event, stats) => {
+  if (!fromOverlay(event)) return;
+  log(`map-draw: ${JSON.stringify(stats)}`);
 });
 
 // Marker in der Nähe der Spielfigur (Id) oder null → Nähe-Taste an/aus

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('overlayApi', {
   saveSettings: (patch) => ipcRenderer.send('overlay:settings', patch),
   toggleFound: (id) => ipcRenderer.send('overlay:found-toggle', id),
   nearby: (id) => ipcRenderer.send('overlay:nearby', id),
+  mapDiagnostics: (stats) => ipcRenderer.send('overlay:map-diagnostics', stats),
   refreshData: () => ipcRenderer.send('overlay:refresh-data'),
   profiles: () => ipcRenderer.send('overlay:profiles'),
   setHotkey: (name, accelerator) => ipcRenderer.invoke('overlay:hotkey', name, accelerator),

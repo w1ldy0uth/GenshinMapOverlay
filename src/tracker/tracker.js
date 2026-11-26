@@ -40,6 +40,28 @@ let building = false;
 const recent = [];
 let lostFrame = null;
 let lastLockAt = 0;
+let runningSince = 0;
+let lastFrameAt = null;
+let framesRead = 0;
+let mapFrames = 0;
+let lastCaptureState = '';
+let lastCaptureLog = -Infinity;
+
+// Runs independently of reader.read(), so a blocked read also appears in the log.
+setInterval(() => {
+  if (!running || !settings?.active || building) {
+    lastCaptureState = '';
+    return;
+  }
+  const now = performance.now();
+  const frameAge = Math.round(now - (lastFrameAt ?? runningSince));
+  const stalled = frameAge > Math.max(3000, settings.searchIntervalMs * 3);
+  const state = stalled ? 'stalled' : lastFrameAt === null ? 'starting' : 'receiving';
+  if (state === lastCaptureState && now - lastCaptureLog < 30000) return;
+  lastCaptureState = state;
+  lastCaptureLog = now;
+  api.log(`map-capture: state=${state} frames=${framesRead} frameAgeMs=${frameAge} fullFrames=${mapFrames} locked=${core.locked}`);
+}, 1000);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // key = i18n-Schlüssel, übersetzt wird im Hauptprozess
@@ -246,9 +268,12 @@ async function grabFrame(wantFull, wantCorner) {
     reader = null;
     return null;
   }
+  lastFrameAt = performance.now();
+  framesRead++;
   let full = null;
   let corner = null;
   if (wantFull) {
+    mapFrames++;
     const width = CAPTURE_WIDTH;
     const height = Math.round((CAPTURE_WIDTH * frame.displayHeight) / frame.displayWidth);
     if (!frameCanvas || frameCanvas.width !== width || frameCanvas.height !== height) {
@@ -307,6 +332,8 @@ function report(res, width, height) {
 async function loop() {
   if (running) return;
   running = true;
+  runningSince = performance.now();
+  lastFrameAt = null;
   let failures = 0;
   while (settings.active && matcher && !building) {
     const started = performance.now();

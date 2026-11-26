@@ -30,6 +30,28 @@ let nearbyDoneUntil = 0;
 let visibility = 0;
 let hover = -1;
 let drawnCount = 0;
+let mapMarkers = 0;
+let mapIcons = 0;
+let lastDrawAt = null;
+let lastViewAt = null;
+let lastMapState = '';
+let lastMapLog = -Infinity;
+
+setInterval(() => {
+  const state = target ? (!data ? 'no-data' : !mapMarkers ? 'empty' : mapIcons ? 'markers' : 'fallback-only') : '';
+  const now = performance.now();
+  if (state === lastMapState && (!state || now - lastMapLog < 30000)) return;
+  lastMapState = state;
+  lastMapLog = now;
+  api.mapDiagnostics({
+    state: state || 'unlocked',
+    markers: mapMarkers,
+    icons: mapIcons,
+    enabled: enabled.size,
+    drawAgeMs: lastDrawAt === null ? null : Math.round(now - lastDrawAt),
+    viewAgeMs: lastViewAt === null ? null : Math.round(now - lastViewAt),
+  });
+}, 1000);
 const drawnIndex = new Int32Array(MAX_DRAWN);
 const drawnX = new Float32Array(MAX_DRAWN);
 const drawnY = new Float32Array(MAX_DRAWN);
@@ -246,6 +268,9 @@ function draw() {
   const H = innerHeight;
   ctx.clearRect(0, 0, W, H);
   drawnCount = 0;
+  mapMarkers = 0;
+  mapIcons = 0;
+  lastDrawAt = performance.now();
   if (!data || !view || visibility <= 0) {
     if (data && minimap && settings.minimap !== false && visibility <= 0) drawMinimap();
     else if (nearby >= 0) setNearby(-1);
@@ -286,6 +311,7 @@ function draw() {
       if (icon) {
         // ganze Pixel: kein Flimmern der Kanten bei Bruchteil-Bewegungen
         ctx.drawImage(icon, Math.round(x - half), Math.round(y - size), Math.round(size), Math.round(size));
+        mapIcons++;
       } else {
         ctx.fillStyle = '#d3bc8e';
         ctx.beginPath();
@@ -294,6 +320,7 @@ function draw() {
       }
       if (isFound) drawCheck(x + half * 0.5, cy - half * 0.5, Math.max(6 * u, size * 0.28));
 
+      mapMarkers++;
       drawnIndex[drawnCount] = i;
       drawnX[drawnCount] = x;
       drawnY[drawnCount] = cy;
@@ -1205,6 +1232,7 @@ api.on('tracker:status', (next) => {
 });
 
 api.on('view', (next) => {
+  lastViewAt = performance.now();
   const wasLocked = !!target;
   if (next.locked) {
     const now = performance.now();
