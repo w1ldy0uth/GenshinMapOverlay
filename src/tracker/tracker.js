@@ -18,6 +18,7 @@ const ANCHOR_AFTER_MS = 1500;
 const TELEPORT_TARGET_MAX_AGE_MS = 1200;
 const TELEPORT_ARRIVAL_MS = 5000;
 const TELEPORT_SCAN_INTERVAL_MS = 80;
+const TELEPORT_EXIT_CONFIRM_MS = 250;
 
 let cv = null;
 let settings = null;
@@ -36,6 +37,7 @@ let minimap = null;
 let minimapAnchor = null;
 let teleportTarget = null;
 let teleportLoading = false;
+let teleportNonLoadingSince = null;
 let teleportArrivalUntil = 0;
 let teleportArrivalStats = null;
 let lastTeleportScan = -Infinity;
@@ -361,6 +363,7 @@ function newTeleportSelectionStats() {
 function clearTeleport() {
   teleportTarget = null;
   teleportLoading = false;
+  teleportNonLoadingSince = null;
   teleportArrivalUntil = 0;
   teleportArrivalStats = null;
   teleportSelectionStats = newTeleportSelectionStats();
@@ -424,6 +427,9 @@ async function loop() {
         continue;
       }
       if (frame.loading) {
+        // An unrecognized frame inside the same loading screen must not consume
+        // the saved destination or make the next loading frame reset it again.
+        teleportNonLoadingSince = null;
         if (teleportLoading) continue;
         teleportLoading = true;
         api.log(`minimap: waypoint selection ${JSON.stringify(teleportSelectionStats)}`);
@@ -446,7 +452,10 @@ async function loop() {
         continue;
       }
       if (teleportLoading) {
+        teleportNonLoadingSince ??= now;
+        if (now - teleportNonLoadingSince < TELEPORT_EXIT_CONFIRM_MS) continue;
         teleportLoading = false;
+        teleportNonLoadingSince = null;
         if (minimapAnchor) {
           teleportArrivalUntil = now + TELEPORT_ARRIVAL_MS;
           teleportArrivalStats = { samples: 0, bestCorr: null };
