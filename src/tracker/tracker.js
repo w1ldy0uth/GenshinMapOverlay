@@ -13,6 +13,7 @@ const CHECK_MS_WORKER = 250;
 const CHECK_MS_INLINE = 1000;
 // Minimap: Takt in der Weltansicht; Anker nur nach so langer Weltansicht (sonst wäre es eine verschobene Karte)
 const MINIMAP_FPS = 15;
+const MINIMAP_RECOVERY_FPS = 4;
 const ANCHOR_AFTER_MS = 1500;
 
 let cv = null;
@@ -370,7 +371,10 @@ async function loop() {
     const recentlyLocked = Date.now() - lastLockAt < 3000;
     const fps = core.flow.active ? FLOW_FPS : settings.fps;
     let interval = core.locked || recentlyLocked ? 1000 / fps : settings.searchIntervalMs;
-    if (!core.locked && minimap && minimap.active && settings.minimap !== false) interval = Math.min(interval, 1000 / MINIMAP_FPS);
+    if (!core.locked && minimap && minimap.active && settings.minimap !== false) {
+      const minimapFps = minimap.recovering ? MINIMAP_RECOVERY_FPS : MINIMAP_FPS;
+      interval = Math.min(interval, 1000 / minimapFps);
+    }
     await sleep(Math.max(0, interval - (performance.now() - started)));
   }
   running = false;

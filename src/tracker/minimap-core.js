@@ -14,7 +14,7 @@
 
   // - tplRadius: Vergleichskreis innerhalb des Rings, arrowRadius: Pfeil der Spielfigur ausblenden
   // - search: Suchweite je Schritt (px), margin: Vorrat des Kachelbilds rundum (px)
-  // - minCorr: darunter unsicher (nichts anzeigen), lostMs: so lange unsicher → aufgeben bis zum nächsten Anker
+  // - minCorr: darunter unsicher (nichts anzeigen), lostMs: so lange unsicher → seltener weitersuchen
   // - maxJump: größerer Sprung je Schritt gilt als Fehltreffer (px)
   // - zoomCheckEvery: so oft (Schritte) auch die anderen Zoomstufen prüfen, zoomCheckBelow: bei schwächerer Korrelation immer
   // - zoomSwitchCorr/zoomSwitchMargin: Wechsel nur bei so guter Korrelation und so viel Vorsprung
@@ -39,6 +39,7 @@
       this.pos = null;
       this.scale = null;
       this.lastGood = 0;
+      this.recovering = false;
       this.steps = 0;
     }
 
@@ -49,11 +50,13 @@
     start(x, y, now) {
       this.pos = { x, y };
       this.lastGood = now;
+      this.recovering = false;
       this.fresh = true;
     }
 
     stop() {
       this.pos = null;
+      this.recovering = false;
     }
 
     // Kachelbild (Grau, float) je Zoomstufe um p, groß genug für Vergleichskreis + Suche + Vorrat.
@@ -132,7 +135,7 @@
       const S = this.fresh ? this.o.search * 2 : this.o.search;
       // nach Anker/Verlust alle Zoomstufen, sonst die aktuelle und ab und zu die anderen (Stadt betreten/verlassen)
       this.steps++;
-      const sure = this.scale && !this.fresh && this.lastCorr >= this.o.zoomCheckBelow;
+      const sure = this.scale && !this.fresh && !this.recovering && this.lastCorr >= this.o.zoomCheckBelow;
       const scales = sure && this.steps % this.o.zoomCheckEvery ? [this.scale] : GEOMETRY.scales;
       await Promise.all(scales.map((s) => this.ensureRegion(this.pos, s, this.o.waitRender)));
 
@@ -177,13 +180,15 @@
       this.pos = { x: best.x, y: best.y };
       this.scale = best.s;
       this.lastGood = now;
+      this.recovering = false;
       this.fresh = false;
       return { ok: true, x: best.x, y: best.y, scale: best.s, corr: best.corr };
     }
 
     unsure(now, corr) {
-      if (now - this.lastGood > this.o.lostMs) this.stop();
-      return { ok: false, corr, lost: !this.pos };
+      // Nach einem Menü ist die letzte Position weiterhin ein brauchbarer Suchanker.
+      this.recovering = now - this.lastGood > this.o.lostMs;
+      return { ok: false, corr, lost: this.recovering };
     }
   }
 
