@@ -101,7 +101,7 @@
       return !!this.pos;
     }
 
-    start(x, y, now) {
+    start(x, y, now, arrival = false) {
       this.clearMotion();
       this.pos = { x, y };
       this.lastGood = now;
@@ -109,6 +109,8 @@
       this.fresh = true;
       this.needsConfirmation = true;
       this.confirmSince = null;
+      this.confirmPosition = null;
+      this.arrival = arrival;
     }
 
     stop() {
@@ -214,7 +216,7 @@
       const cv = this.cv;
       const R = this.o.tplRadius;
       // erster Schritt nach dem Anker: weiter suchen (Figur kann sich beim Schließen der Karte schon bewegt haben)
-      const S = this.fresh ? this.o.search * 2 : this.needsConfirmation ? this.o.search
+      const S = this.fresh ? (this.arrival ? 12 : this.o.search * 2) : this.needsConfirmation ? this.o.search
         : Math.min(this.o.search, Math.ceil(4 + (now - this.lastGood) * 0.025));
       // nach Anker/Verlust alle Zoomstufen, sonst die aktuelle und ab und zu die anderen (Stadt betreten/verlassen)
       this.steps++;
@@ -262,15 +264,24 @@
       }
       this.lastCorr = best.corr;
       const jump = Math.hypot(best.x - this.pos.x, best.y - this.pos.y) * best.s;
-      const minCorr = this.fresh ? Math.max(this.o.minCorr, 0.7) : this.o.minCorr;
+      const freshThreshold = this.arrival ? 0.5 : 0.7;
+      const minCorr = this.fresh ? Math.max(this.o.minCorr, freshThreshold) : this.o.minCorr;
       if (best.corr < minCorr) return this.useMotion(tpl, now, motion, best.corr);
       if (!this.fresh && best.s === this.scale && jump > this.o.maxJump) return this.unsure(now, best.corr);
       // Isolated matches after an interruption can come from a different, similar-looking area.
       if (this.needsConfirmation) {
+        if (this.arrival && this.confirmPosition &&
+          (best.s !== this.confirmPosition.s ||
+            Math.hypot(best.x - this.confirmPosition.x, best.y - this.confirmPosition.y) * best.s > 8)) {
+          this.confirmSince = null;
+        }
         this.confirmSince ??= now;
+        if (this.arrival) this.confirmPosition = best;
         if (now - this.confirmSince < this.o.reacquireMs) return { ok: false, corr: best.corr };
         this.needsConfirmation = false;
         this.confirmSince = null;
+        this.confirmPosition = null;
+        this.arrival = false;
       }
       this.pos = { x: best.x, y: best.y };
       this.scale = best.s;
@@ -300,6 +311,7 @@
       this.recovering = sinceMatch > this.o.lostMs;
       this.needsConfirmation = true;
       this.confirmSince = null;
+      this.confirmPosition = null;
       return { ok: false, corr, lost: this.recovering };
     }
   }

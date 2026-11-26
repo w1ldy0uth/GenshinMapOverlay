@@ -1,7 +1,7 @@
 // Unsichtbares Tracker-Fenster: Aufnahme + Bildvergleich, Ergebnis an den Hauptprozess.
 // Ablauf (Fluss, Verankern, Drift) in tracker-core.js, Drift-Prüfung im Worker (check-worker.js),
 // Spielfigur auf der Minimap (Weltansicht) in minimap-core.js.
-/* global MatcherCore, ReferenceBuilder, TrackerCore, MinimapCore, Hud */
+/* global MatcherCore, ReferenceBuilder, TrackerCore, MinimapCore, TeleportCore, Hud */
 const api = window.trackerApi;
 const CAPTURE_WIDTH = 1280;
 const FLOW_FPS = 30;
@@ -15,6 +15,9 @@ const CHECK_MS_INLINE = 1000;
 const MINIMAP_FPS = 15;
 const MINIMAP_RECOVERY_FPS = 4;
 const ANCHOR_AFTER_MS = 1500;
+const TELEPORT_TARGET_MAX_AGE_MS = 1200;
+const TELEPORT_ARRIVAL_MS = 5000;
+const TELEPORT_SCAN_INTERVAL_MS = 80;
 
 let cv = null;
 let settings = null;
@@ -31,6 +34,10 @@ let cornerCtx = null;
 let loadingCtx = null;
 let minimap = null;
 let minimapAnchor = null;
+let teleportTarget = null;
+let teleportLoading = false;
+let teleportArrivalUntil = 0;
+let lastTeleportScan = -Infinity;
 let minimapShown = false;
 let unlockedSince = 0;
 let lastSearch = 0;
@@ -318,6 +325,34 @@ function reportMinimap(m) {
   minimapShown = show;
 }
 
+function rememberTeleportTarget(img, view, now) {
+  if (now - lastTeleportScan < TELEPORT_SCAN_INTERVAL_MS) return;
+  lastTeleportScan = now;
+  const point = TeleportCore.selectedWaypoint(img);
+  if (!point) return;
+  if (!view.ok) {
+    // The details panel reduces the area with matchable map features.
+    const row = point.mapWidth * 4;
+    const cropped = new Uint8Array(row * img.height);
+    for (let y = 0; y < img.height; y++) {
+      const offset = y * img.width * 4;
+      cropped.set(img.data.subarray(offset, offset + row), y * row);
+    }
+    view = matcher.locate(cropped, point.mapWidth, img.height, null);
+    if (!view.ok) return;
+  }
+  const x = (point.x - view.tx) / view.s;
+  const y = (point.y - view.ty) / view.s;
+  const same = teleportTarget && Math.hypot(x - teleportTarget.x, y - teleportTarget.y) <= 12;
+  teleportTarget = { x, y, at: now, confirmed: !!same };
+}
+
+function clearTeleport() {
+  teleportTarget = null;
+  teleportLoading = false;
+  teleportArrivalUntil = 0;
+}
+
 function report(res, width, height) {
   const nowLocked = !!res && res.ok;
   if (nowLocked) {
@@ -351,16 +386,31 @@ async function loop() {
       // große Karte: offen → jedes Bild; sonst alle searchIntervalMs suchen, dazwischen nur die Minimap
       const now = performance.now();
       const recentlyLocked = Date.now() - lastLockAt < 3000;
-      const searchDue = core.locked || recentlyLocked || now - lastSearch >= settings.searchIntervalMs;
-      const minimapOn = settings.minimap !== false && !!minimap && (minimap.active || !!minimapAnchor);
-      const frame = await grabFrame(searchDue, minimapOn && !core.locked, minimapOn);
+      const minimapEnabled = settings.minimap !== false && !!minimap;
+      const scanAfterMap = minimapEnabled && unlockedSince > 0 && now - unlockedSince < TELEPORT_TARGET_MAX_AGE_MS;
+      const searchDue = core.locked || recentlyLocked || scanAfterMap || now - lastSearch >= settings.searchIntervalMs;
+      if (teleportTarget && now - teleportTarget.at > TELEPORT_TARGET_MAX_AGE_MS) teleportTarget = null;
+      if (teleportArrivalUntil && now >= teleportArrivalUntil) {
+        minimap.stop();
+        minimapAnchor = null;
+        teleportArrivalUntil = 0;
+        reportMinimap(null);
+        api.log('minimap: teleport destination not confirmed');
+      }
+      const minimapOn = minimapEnabled && (minimap.active || !!minimapAnchor);
+      const watchLoading = minimapEnabled && (minimapOn || teleportTarget || teleportLoading);
+      const frame = await grabFrame(searchDue, minimapOn && !core.locked, watchLoading);
       if (!frame) {
         await sleep(200);
         continue;
       }
       if (frame.loading) {
+        if (teleportLoading) continue;
+        teleportLoading = true;
         minimap.stop();
-        minimapAnchor = null;
+        minimapAnchor = teleportTarget?.confirmed ? { x: teleportTarget.x, y: teleportTarget.y } : null;
+        teleportTarget = null;
+        teleportArrivalUntil = 0;
         reportMinimap(null);
         if (core.locked) {
           core.reset();
@@ -369,7 +419,12 @@ async function loop() {
           report({ scene: true });
         }
         api.log('minimap: anchor cleared on loading screen');
+        if (minimapAnchor) api.log('minimap: selected waypoint saved for arrival');
         continue;
+      }
+      if (teleportLoading) {
+        teleportLoading = false;
+        if (minimapAnchor) teleportArrivalUntil = now + TELEPORT_ARRIVAL_MS;
       }
       if (frame.full) {
         const img = frame.full;
@@ -377,12 +432,16 @@ async function loop() {
         const wasLocked = core.locked;
         const prior = core.prior;
         const res = core.step(img, performance.now());
+        if (minimapEnabled && (res.ok || wasLocked || recentlyLocked || scanAfterMap || teleportTarget)) {
+          rememberTeleportTarget(img, res, now);
+        }
         recent.push({ t: Date.now(), mode: res.mode, ok: res.ok, inliers: res.inliers, pairs: res.pairs, spread: res.spread, s: res.s, ms: res.ms });
         if (recent.length > 240) recent.shift();
         if (res.ok) {
           // Karte frisch geöffnet (vorher Weltansicht) → Mitte = Spielfigur, Anker für die Minimap
           if (!wasLocked && res.mode !== 'local-recovery' && now - unlockedSince > ANCHOR_AFTER_MS && minimap) {
             minimapAnchor = { x: (img.width / 2 - res.tx) / res.s, y: (img.height / 2 - res.ty) / res.s };
+            teleportArrivalUntil = 0;
             minimap.stop();
           }
           lastLockAt = Date.now();
@@ -401,10 +460,15 @@ async function loop() {
         reportMinimap(null);
       } else if (frame.corner) {
         if (minimapAnchor) {
-          minimap.start(minimapAnchor.x, minimapAnchor.y, now);
+          minimap.start(minimapAnchor.x, minimapAnchor.y, now, !!teleportArrivalUntil);
           minimapAnchor = null;
         }
-        reportMinimap(await minimap.step(frame.corner, now));
+        const pos = await minimap.step(frame.corner, now);
+        if (pos.ok && teleportArrivalUntil) {
+          teleportArrivalUntil = 0;
+          api.log('minimap: teleport destination confirmed');
+        }
+        reportMinimap(pos);
       }
       if (failures) status('ready', 'status.ready');
       failures = 0;
@@ -421,6 +485,9 @@ async function loop() {
     const recentlyLocked = Date.now() - lastLockAt < 3000;
     const fps = core.flow.active ? FLOW_FPS : settings.fps;
     let interval = core.locked || recentlyLocked ? 1000 / fps : settings.searchIntervalMs;
+    if (settings.minimap !== false && unlockedSince > 0 && started - unlockedSince < TELEPORT_TARGET_MAX_AGE_MS) {
+      interval = Math.min(interval, TELEPORT_SCAN_INTERVAL_MS);
+    }
     if (!core.locked && minimap && minimap.active && settings.minimap !== false) {
       const minimapFps = minimap.recovering ? MINIMAP_RECOVERY_FPS : MINIMAP_FPS;
       interval = Math.min(interval, 1000 / minimapFps);
@@ -432,6 +499,8 @@ async function loop() {
     stopCapture();
     if (core) core.reset();
     if (minimap) minimap.stop();
+    minimapAnchor = null;
+    clearTeleport();
     report(null);
     reportMinimap(null);
     if (matcher) status('paused', 'status.paused');
@@ -444,6 +513,8 @@ async function applySettings(next) {
   // Minimap aus (Tray/Panel) → Verfolgung beenden, Marker weg
   if (settings.minimap === false && minimap) {
     minimap.stop();
+    minimapAnchor = null;
+    clearTeleport();
     reportMinimap(null);
   }
   if (levelsChanged) await prepareReference(false);
@@ -462,6 +533,8 @@ api.on('tracker:restart-capture', () => {
   stopCapture();
   if (core) core.reset();
   if (minimap) minimap.stop();
+  minimapAnchor = null;
+  clearTeleport();
   reportMinimap(null);
 });
 
