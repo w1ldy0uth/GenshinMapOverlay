@@ -46,7 +46,8 @@
   // - waitRender: auf neues Kachelbild warten statt im Hintergrund (Messbank)
   const DEFAULTS = {
     tplRadius: 86, arrowRadius: 18, search: 24, margin: 160, minCorr: 0.5, lostMs: 3000, maxJump: 40,
-    zoomCheckEvery: 8, zoomCheckBelow: 0.8, zoomSwitchCorr: 0.75, zoomSwitchMargin: 0.08, reacquireMs: 600, waitRender: false,
+    zoomCheckEvery: 8, zoomCheckBelow: 0.8, zoomSwitchCorr: 0.75, zoomSwitchMargin: 0.08,
+    holdMs: 350, reacquireMs: 600, waitRender: false,
   };
 
   class MinimapTracker {
@@ -219,8 +220,14 @@
     }
 
     unsure(now, corr) {
+      const sinceMatch = now - this.lastGood;
+      // Keep the confirmed pose briefly through weak frames. The loading-screen
+      // detector stops the tracker immediately when the old pose is invalid.
+      if (!this.needsConfirmation && sinceMatch <= this.o.holdMs) {
+        return { ok: true, x: this.pos.x, y: this.pos.y, scale: this.scale, corr };
+      }
       // Nach einem Menü ist die letzte Position weiterhin ein brauchbarer Suchanker.
-      this.recovering = now - this.lastGood > this.o.lostMs;
+      this.recovering = sinceMatch > this.o.lostMs;
       this.needsConfirmation = true;
       this.confirmSince = null;
       return { ok: false, corr, lost: this.recovering };
