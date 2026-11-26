@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   const angles = Array.from({ length: 16 }, (_, i) => i * Math.PI / 8);
 
-  function selectedWaypoint({ data, width, height }) {
+  function selectedWaypoint({ data, width, height }, diagnostics) {
     const scale = height / 720;
     const panel = width - Math.round(328 * scale);
     const at = (x, y) => 4 * (Math.round(y) * width + Math.round(x));
@@ -18,6 +18,7 @@
     }
     if (!dark(at(panel + 85 * scale, 666 * scale)) &&
       !dark(at(width - 80 * scale, 666 * scale))) return null;
+    if (diagnostics) diagnostics.panels++;
 
     const offsets = angles.map((angle) => [19, 20.5, 22].map((radius) =>
       4 * (Math.round(scale * radius * Math.cos(angle)) +
