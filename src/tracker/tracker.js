@@ -28,6 +28,7 @@ let frameCanvas = null;
 let frameCtx = null;
 let cornerCanvas = null;
 let cornerCtx = null;
+let loadingCtx = null;
 let minimap = null;
 let minimapAnchor = null;
 let minimapShown = false;
@@ -261,7 +262,7 @@ function stopCapture() {
 }
 
 // full: ganzes Bild (1280 breit) für die große Karte; corner: Minimap-Ecke in voller Auflösung, auf 1080p skaliert
-async function grabFrame(wantFull, wantCorner) {
+async function grabFrame(wantFull, wantCorner, watchLoading) {
   if (!reader) await startCapture();
   const { value: frame, done } = await reader.read();
   if (done || !frame) {
@@ -270,6 +271,15 @@ async function grabFrame(wantFull, wantCorner) {
   }
   lastFrameAt = performance.now();
   framesRead++;
+  if (watchLoading) {
+    const { width, height } = MinimapCore.LOADING_SAMPLE;
+    loadingCtx ??= new OffscreenCanvas(width, height).getContext('2d', { willReadFrequently: true });
+    loadingCtx.drawImage(frame, 0, 0, width, height);
+    if (MinimapCore.isLoadingScreen(loadingCtx.getImageData(0, 0, width, height))) {
+      frame.close();
+      return { loading: true };
+    }
+  }
   let full = null;
   let corner = null;
   if (wantFull) {
@@ -343,9 +353,22 @@ async function loop() {
       const recentlyLocked = Date.now() - lastLockAt < 3000;
       const searchDue = core.locked || recentlyLocked || now - lastSearch >= settings.searchIntervalMs;
       const minimapOn = settings.minimap !== false && !!minimap && (minimap.active || !!minimapAnchor);
-      const frame = await grabFrame(searchDue, minimapOn && !core.locked);
+      const frame = await grabFrame(searchDue, minimapOn && !core.locked, minimapOn);
       if (!frame) {
         await sleep(200);
+        continue;
+      }
+      if (frame.loading) {
+        minimap.stop();
+        minimapAnchor = null;
+        reportMinimap(null);
+        if (core.locked) {
+          core.reset();
+          lastLockAt = 0;
+          unlockedSince = now;
+          report({ scene: true });
+        }
+        api.log('minimap: anchor cleared on loading screen');
         continue;
       }
       if (frame.full) {

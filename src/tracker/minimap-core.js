@@ -11,6 +11,31 @@
   // Gemessen bei 1080p (testbilder/clips/welt1, welt2): Spielfigur bei (168, 125), Kartenkreis r ≈ 100.
   // Bildschirmpixel je Kartenpixel (z13): offene Welt 1,2, Stadt 3,6; skaliert mit der Bildhöhe
   const GEOMETRY = { cx: 168, cy: 125, radius: 100, scales: [1.2, 3.6], corner: { x: 0, y: 0, w: 420, h: 330 } };
+  const LOADING_SAMPLE = { width: 96, height: 54 };
+
+  function isLoadingScreen({ data, width, height }) {
+    const pixel = (x, y) => 4 * (Math.floor(y * height) * width + Math.floor(x * width));
+    // Dark loading screen: flat charcoal around the edges, emblem in the middle,
+    // and bright tip text below. A plain black fade alone is not a loading screen.
+    for (const y of [0.15, 0.35, 0.65, 0.8]) {
+      for (const x of [0.08, 0.2, 0.8, 0.92]) {
+        const i = pixel(x, y);
+        if (Math.abs(data[i] - 27) > 6 || Math.abs(data[i + 1] - 29) > 6 || Math.abs(data[i + 2] - 32) > 6) return false;
+      }
+    }
+    const hasBrightPixels = (left, top, right, bottom, min) => {
+      let count = 0;
+      for (let y = Math.floor(top * height); y < Math.ceil(bottom * height); y++) {
+        for (let x = Math.floor(left * width); x < Math.ceil(right * width); x++) {
+          const i = 4 * (y * width + x);
+          if (data[i] >= 75 && data[i + 1] >= 65 && ++count >= min) return true;
+        }
+      }
+      return false;
+    };
+    return hasBrightPixels(0.44, 0.38, 0.56, 0.56, 6)
+      && hasBrightPixels(0.24, 0.76, 0.76, 0.94, 6);
+  }
 
   // - tplRadius: Vergleichskreis innerhalb des Rings, arrowRadius: Pfeil der Spielfigur ausblenden
   // - search: Suchweite je Schritt (px), margin: Vorrat des Kachelbilds rundum (px)
@@ -202,5 +227,5 @@
     }
   }
 
-  return { MinimapTracker, GEOMETRY, DEFAULTS };
+  return { MinimapTracker, GEOMETRY, DEFAULTS, LOADING_SAMPLE, isLoadingScreen };
 });
